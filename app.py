@@ -1,48 +1,34 @@
-import os
-import sys
-import asyncio
-import logging
-import asyncpg
-import traceback
+import os, sys, asyncio, logging, asyncpg, traceback
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
 from openai import AsyncOpenAI
 from aiohttp import web
 
-# Отключаем буферизацию вывода
+# --- Настройка вывода ---
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
-print("=== Запуск бота ===")
-
-# Проверяем переменные окружения
-required_vars = ["TELEGRAM_TOKEN", "OPENROUTER_API_KEY", "DATABASE_URL"]
-for var in required_vars:
-    if var not in os.environ:
-        print(f"ОШИБКА: переменная {var} не установлена", file=sys.stderr)
-        sys.exit(1)
-    print(f"{var} установлена (первые 10 символов: {os.environ[var][:10]}...)")
-
+# --- Конфигурация из переменных окружения ---
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
 DATABASE_URL = os.environ["DATABASE_URL"]
-PORT = int(os.environ.get("PORT", 8443))
 
-# Клиент OpenRouter
+# Получаем порт из окружения Render или используем значение по умолчанию
+PORT = int(os.environ.get("PORT", 8080))
+
+# --- Клиенты и бот ---
 client = AsyncOpenAI(
     api_key=OPENROUTER_API_KEY,
     base_url="https://openrouter.ai/api/v1",
 )
 
-# Бот
 storage = MemoryStorage()
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher(storage=storage)
 
-logging.basicConfig(level=logging.INFO)
-
-# --- Работа с базой данных ---
+# --- Функции базы данных ---
+# ... (ваш код для работы с БД остается без изменений)
 async def init_db():
     conn = await asyncpg.connect(DATABASE_URL)
     await conn.execute("""
@@ -71,7 +57,9 @@ async def save_user(user_id: int, username: str = None):
 
 async def add_task_to_db(user_id: int, task_text: str):
     conn = await asyncpg.connect(DATABASE_URL)
-    await conn.execute("INSERT INTO tasks (user_id, task_text) VALUES ($1, $2);", user_id, task_text)
+    await conn.execute("""
+        INSERT INTO tasks (user_id, task_text) VALUES ($1, $2);
+    """, user_id, task_text)
     await conn.close()
     return "✅ Задача добавлена!"
 
@@ -98,15 +86,11 @@ async def complete_task_in_db(user_id: int, task_id: int):
     else:
         return "😕 Задача с таким номером не найдена."
 
-# --- Обработчики команд ---
+# --- Обработчики команд бота ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await save_user(message.from_user.id, message.from_user.username)
-    await message.answer(
-        "Привет! Я твой личный секретарь.\n"
-        "Добавляй задачи командой /add, смотри список /list, отмечай выполненные /done.\n"
-        "Можешь просто писать задачи — я их запомню!"
-    )
+    await message.answer("Привет! Я твой личный секретарь.\nДобавляй задачи командой /add, смотри список /list, отмечай выполненные /done.\nМожешь просто писать задачи — я их запомню!")
 
 @dp.message(Command("add"))
 async def cmd_add(message: types.Message):
@@ -140,7 +124,7 @@ async def handle_ai_query(message: types.Message):
     await bot.send_chat_action(message.chat.id, action="typing")
     try:
         response = await client.chat.completions.create(
-            model="deepseek/deepseek-r1:free",   # <--- ИСПРАВЛЕННАЯ МОДЕЛЬ
+            model="deepseek/deepseek-r1:free",
             messages=[
                 {"role": "system", "content": "Ты — полезный, дружелюбный и адекватный личный ассистент. Помогай пользователю планировать задачи, отвечай на вопросы по делу, поддерживай позитивный настрой. Не выдумывай ерунду."},
                 {"role": "user", "content": message.text}
@@ -152,25 +136,27 @@ async def handle_ai_query(message: types.Message):
         logging.error(f"Ошибка при запросе к OpenRouter: {e}")
         await message.answer("Извини, произошла ошибка при обращении к нейросети. Попробуй позже.")
 
-# --- Health check для Render ---
+# --- Веб-сервер для Health Check Render ---
 async def handle_health_check(_):
     return web.Response(text="OK")
 
 async def run_web_server():
     app = web.Application()
-    app.router.add_get("/", handle_health_check)
     app.router.add_get("/health", handle_health_check)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host='0.0.0.0', port=PORT)
     await site.start()
-    print(f"Web server started on port {PORT}")
+    print(f"✅ Web server started on port {PORT} for health checks")
+    # Бесконечное ожидание, чтобы веб-сервер работал постоянно
     await asyncio.Event().wait()
 
 # --- Запуск ---
 async def main():
     await init_db()
+    # Запускаем веб-сервер для Health Check как отдельную задачу
     asyncio.create_task(run_web_server())
+    print("🚀 Starting bot polling...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
