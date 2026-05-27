@@ -1,16 +1,19 @@
+import os
 import asyncio
 import logging
 import asyncpg
+import sys
+import traceback
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
 from openai import AsyncOpenAI
 
-# ================= ВСТАВЬТЕ ВАШИ ДАННЫЕ =================
-TELEGRAM_TOKEN = "ВАШ_ТОКЕН_ОТ_BOTFATHER"   # из шага 2
-OPENROUTER_API_KEY = "sk-or-v1-...."        # из шага 1
-DATABASE_URL = "postgresql://..."           # из шага 3 (Aiven)
-# =======================================================
+# === ВСЕ СЕКРЕТЫ БЕРУТСЯ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ===
+TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
+OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
+DATABASE_URL = os.environ["DATABASE_URL"]
+# =================================================
 
 client = AsyncOpenAI(
     api_key=OPENROUTER_API_KEY,
@@ -133,4 +136,9 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except Exception as e:
+        print("FATAL ERROR:")
+        traceback.print_exc()
+        sys.exit(1)
