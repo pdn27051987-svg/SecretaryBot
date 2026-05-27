@@ -1,9 +1,14 @@
-import os, sys, asyncio, logging, asyncpg, traceback
+import os
+import sys
+import asyncio
+import logging
+import asyncpg
+import traceback
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
 from openai import AsyncOpenAI
-from aiohttp import web  # <-- Добавлен импорт для веб-сервера
+from aiohttp import web
 
 # Отключаем буферизацию вывода
 sys.stdout.reconfigure(line_buffering=True)
@@ -11,7 +16,7 @@ sys.stderr.reconfigure(line_buffering=True)
 
 print("=== Запуск бота ===")
 
-# --- Проверка переменных окружения ---
+# Проверяем переменные окружения
 required_vars = ["TELEGRAM_TOKEN", "OPENROUTER_API_KEY", "DATABASE_URL"]
 for var in required_vars:
     if var not in os.environ:
@@ -22,15 +27,22 @@ for var in required_vars:
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
 DATABASE_URL = os.environ["DATABASE_URL"]
-PORT = int(os.environ.get("PORT", 8443)) # <-- Порт для веб-сервера
+PORT = int(os.environ.get("PORT", 8443))
 
-# --- Инициализация клиентов ---
-client = AsyncOpenAI(api_key=OPENROUTER_API_KEY, base_url="https://openrouter.ai/api/v1")
+# Клиент OpenRouter
+client = AsyncOpenAI(
+    api_key=OPENROUTER_API_KEY,
+    base_url="https://openrouter.ai/api/v1",
+)
+
+# Бот
 storage = MemoryStorage()
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher(storage=storage)
 
-# --- Функции бота (без изменений, ваши функции init_db, save_user, etc.) ---
+logging.basicConfig(level=logging.INFO)
+
+# --- Работа с базой данных ---
 async def init_db():
     conn = await asyncpg.connect(DATABASE_URL)
     await conn.execute("""
@@ -65,25 +77,36 @@ async def add_task_to_db(user_id: int, task_text: str):
 
 async def get_tasks_from_db(user_id: int):
     conn = await asyncpg.connect(DATABASE_URL)
-    rows = await conn.fetch("SELECT id, task_text, is_done FROM tasks WHERE user_id = $1 AND is_done = FALSE ORDER BY created_at DESC;", user_id)
+    rows = await conn.fetch("""
+        SELECT id, task_text, is_done FROM tasks
+        WHERE user_id = $1 AND is_done = FALSE
+        ORDER BY created_at DESC;
+    """, user_id)
     await conn.close()
     tasks = [f"🔘 {row['task_text']}" for row in rows if not row['is_done']]
     return tasks if tasks else ["🚀 У тебя пока нет задач!"]
 
 async def complete_task_in_db(user_id: int, task_id: int):
     conn = await asyncpg.connect(DATABASE_URL)
-    result = await conn.execute("UPDATE tasks SET is_done = TRUE WHERE user_id = $1 AND id = $2;", user_id, task_id)
+    result = await conn.execute("""
+        UPDATE tasks SET is_done = TRUE
+        WHERE user_id = $1 AND id = $2;
+    """, user_id, task_id)
     await conn.close()
     if result == "UPDATE 1":
         return "🎉 Умница! Задача выполнена!"
     else:
         return "😕 Задача с таким номером не найдена."
 
-# --- Обработчики команд бота (без изменений) ---
+# --- Обработчики команд ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await save_user(message.from_user.id, message.from_user.username)
-    await message.answer("Привет! Я твой личный секретарь.\nДобавляй задачи командой /add, смотри список /list, отмечай выполненные /done.\nМожешь просто писать задачи — я их запомню!")
+    await message.answer(
+        "Привет! Я твой личный секретарь.\n"
+        "Добавляй задачи командой /add, смотри список /list, отмечай выполненные /done.\n"
+        "Можешь просто писать задачи — я их запомню!"
+    )
 
 @dp.message(Command("add"))
 async def cmd_add(message: types.Message):
@@ -110,15 +133,16 @@ async def cmd_done(message: types.Message):
     result = await complete_task_in_db(message.from_user.id, task_id)
     await message.answer(result)
 
+# --- Обработка обычных сообщений (через DeepSeek R1) ---
 @dp.message()
 async def handle_ai_query(message: types.Message):
     await save_user(message.from_user.id, message.from_user.username)
     await bot.send_chat_action(message.chat.id, action="typing")
     try:
         response = await client.chat.completions.create(
-            model="openrouter/free",
+            model="deepseek/deepseek-r1:free",   # <--- ИСПРАВЛЕННАЯ МОДЕЛЬ
             messages=[
-                {"role": "system", "content": "Ты — полезный и дружелюбный личный ассистент. Помогай пользователю планировать задачи, отвечай на вопросы и поддерживай позитивный настрой."},
+                {"role": "system", "content": "Ты — полезный, дружелюбный и адекватный личный ассистент. Помогай пользователю планировать задачи, отвечай на вопросы по делу, поддерживай позитивный настрой. Не выдумывай ерунду."},
                 {"role": "user", "content": message.text}
             ],
         )
@@ -128,7 +152,7 @@ async def handle_ai_query(message: types.Message):
         logging.error(f"Ошибка при запросе к OpenRouter: {e}")
         await message.answer("Извини, произошла ошибка при обращении к нейросети. Попробуй позже.")
 
-# --- Функция для запуска веб-сервера (Health Check) ---
+# --- Health check для Render ---
 async def handle_health_check(_):
     return web.Response(text="OK")
 
@@ -143,7 +167,7 @@ async def run_web_server():
     print(f"Web server started on port {PORT}")
     await asyncio.Event().wait()
 
-# --- Запуск бота ---
+# --- Запуск ---
 async def main():
     await init_db()
     asyncio.create_task(run_web_server())
