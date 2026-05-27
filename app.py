@@ -1,31 +1,47 @@
 import os
+import sys
 import asyncio
 import logging
 import asyncpg
-import sys
 import traceback
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
 from openai import AsyncOpenAI
 
-# === ВСЕ СЕКРЕТЫ БЕРУТСЯ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ===
+# Отключаем буферизацию вывода, чтобы ошибки сразу попадали в логи Render
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
+print("=== Запуск бота ===")
+
+# Проверяем, что все необходимые переменные окружения заданы
+required_vars = ["TELEGRAM_TOKEN", "OPENROUTER_API_KEY", "DATABASE_URL"]
+for var in required_vars:
+    if var not in os.environ:
+        print(f"ОШИБКА: переменная окружения {var} не установлена", file=sys.stderr)
+        sys.exit(1)
+    else:
+        print(f"{var} установлена (первые 10 символов: {os.environ[var][:10]}...)")
+
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
 DATABASE_URL = os.environ["DATABASE_URL"]
-# =================================================
 
+# Инициализация DeepSeek через OpenRouter
 client = AsyncOpenAI(
     api_key=OPENROUTER_API_KEY,
     base_url="https://openrouter.ai/api/v1",
 )
 
+# Инициализация бота
 storage = MemoryStorage()
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher(storage=storage)
 
 logging.basicConfig(level=logging.INFO)
 
+# ---- Функции базы данных ----
 async def init_db():
     conn = await asyncpg.connect(DATABASE_URL)
     await conn.execute("""
@@ -83,6 +99,7 @@ async def complete_task_in_db(user_id: int, task_id: int):
     else:
         return "😕 Задача с таким номером не найдена."
 
+# ---- Обработчики команд ----
 @dp.message(Command(commands=["start"]))
 async def cmd_start(message: types.Message):
     await save_user(message.from_user.id, message.from_user.username)
@@ -131,6 +148,7 @@ async def handle_ai_query(message: types.Message):
         logging.error(e)
         await message.answer("Извини, произошла ошибка. Попробуй позже.")
 
+# ---- Запуск ----
 async def main():
     await init_db()
     await dp.start_polling(bot)
@@ -139,6 +157,6 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except Exception as e:
-        print("FATAL ERROR:")
-        traceback.print_exc()
+        print("FATAL ERROR in asyncio.run:", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         sys.exit(1)
