@@ -9,39 +9,38 @@ from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
 from openai import AsyncOpenAI
 
-# Отключаем буферизацию вывода, чтобы ошибки сразу попадали в логи Render
+# Отключаем буферизацию вывода
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
 print("=== Запуск бота ===")
 
-# Проверяем, что все необходимые переменные окружения заданы
+# Проверяем переменные окружения
 required_vars = ["TELEGRAM_TOKEN", "OPENROUTER_API_KEY", "DATABASE_URL"]
 for var in required_vars:
     if var not in os.environ:
-        print(f"ОШИБКА: переменная окружения {var} не установлена", file=sys.stderr)
+        print(f"ОШИБКА: переменная {var} не установлена", file=sys.stderr)
         sys.exit(1)
-    else:
-        print(f"{var} установлена (первые 10 символов: {os.environ[var][:10]}...)")
+    print(f"{var} установлена (первые 10 символов: {os.environ[var][:10]}...)")
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
 DATABASE_URL = os.environ["DATABASE_URL"]
 
-# Инициализация DeepSeek через OpenRouter
+# Клиент OpenRouter (совместим с OpenAI API)
 client = AsyncOpenAI(
     api_key=OPENROUTER_API_KEY,
     base_url="https://openrouter.ai/api/v1",
 )
 
-# Инициализация бота
+# Бот
 storage = MemoryStorage()
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher(storage=storage)
 
 logging.basicConfig(level=logging.INFO)
 
-# ---- Функции базы данных ----
+# --- Работа с базой данных ---
 async def init_db():
     conn = await asyncpg.connect(DATABASE_URL)
     await conn.execute("""
@@ -99,13 +98,17 @@ async def complete_task_in_db(user_id: int, task_id: int):
     else:
         return "😕 Задача с таким номером не найдена."
 
-# ---- Обработчики команд ----
-@dp.message(Command(commands=["start"]))
+# --- Обработчики команд ---
+@dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await save_user(message.from_user.id, message.from_user.username)
-    await message.answer("Привет! Я твой личный секретарь. Добавляй задачи командой /add, смотри список /list, отмечай выполненные /done. Можешь просто писать задачи — я их запомню!")
+    await message.answer(
+        "Привет! Я твой личный секретарь.\n"
+        "Добавляй задачи командой /add, смотри список /list, отмечай выполненные /done.\n"
+        "Можешь просто писать задачи — я их запомню!"
+    )
 
-@dp.message(Command(commands=["add"]))
+@dp.message(Command("add"))
 async def cmd_add(message: types.Message):
     task = message.text.replace("/add", "", 1).strip()
     if not task:
@@ -114,13 +117,13 @@ async def cmd_add(message: types.Message):
     result = await add_task_to_db(message.from_user.id, task)
     await message.answer(result)
 
-@dp.message(Command(commands=["list"]))
+@dp.message(Command("list"))
 async def cmd_list(message: types.Message):
     tasks = await get_tasks_from_db(message.from_user.id)
     task_list = "\n".join(tasks)
     await message.answer(f"📋 *Твои задачи:*\n{task_list}", parse_mode="MarkdownV2")
 
-@dp.message(Command(commands=["done"]))
+@dp.message(Command("done"))
 async def cmd_done(message: types.Message):
     try:
         task_id = int(message.text.replace("/done", "", 1).strip())
@@ -135,8 +138,9 @@ async def handle_ai_query(message: types.Message):
     await save_user(message.from_user.id, message.from_user.username)
     await bot.send_chat_action(message.chat.id, action="typing")
     try:
+        # Используем openrouter/free — автоматический выбор лучшей бесплатной модели
         response = await client.chat.completions.create(
-            model="deepseek/deepseek-chat:free",
+            model="openrouter/free",
             messages=[
                 {"role": "system", "content": "Ты — полезный и дружелюбный личный ассистент. Помогай пользователю планировать задачи, отвечай на вопросы и поддерживай позитивный настрой."},
                 {"role": "user", "content": message.text}
@@ -145,10 +149,10 @@ async def handle_ai_query(message: types.Message):
         reply = response.choices[0].message.content
         await message.answer(reply)
     except Exception as e:
-        logging.error(e)
-        await message.answer("Извини, произошла ошибка. Попробуй позже.")
+        logging.error(f"Ошибка при запросе к OpenRouter: {e}")
+        await message.answer("Извини, произошла ошибка при обращении к нейросети. Попробуй позже.")
 
-# ---- Запуск ----
+# --- Запуск ---
 async def main():
     await init_db()
     await dp.start_polling(bot)
