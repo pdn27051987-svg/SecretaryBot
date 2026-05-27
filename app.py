@@ -1,20 +1,17 @@
-import os
-import sys
-import asyncio
-import logging
-import asyncpg
-import traceback
+import os, sys, asyncio, logging, asyncpg, traceback
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
 from openai import AsyncOpenAI
 from aiohttp import web
 
+# Отключаем буферизацию вывода
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
-print("=== Запуск бота с Gemini ===")
+print("=== Запуск бота ===")
 
+# Проверка переменных окружения
 required_vars = ["TELEGRAM_TOKEN", "OPENROUTER_API_KEY", "DATABASE_URL"]
 for var in required_vars:
     if var not in os.environ:
@@ -25,20 +22,22 @@ for var in required_vars:
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
 DATABASE_URL = os.environ["DATABASE_URL"]
-PORT = int(os.environ.get("PORT", 8443))
+PORT = int(os.environ.get("PORT", 8080))
 
+# Клиент OpenRouter
 client = AsyncOpenAI(
     api_key=OPENROUTER_API_KEY,
     base_url="https://openrouter.ai/api/v1",
 )
 
+# Бот
 storage = MemoryStorage()
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher(storage=storage)
 
 logging.basicConfig(level=logging.INFO)
 
-# --- База данных (те же функции) ---
+# --- Работа с базой данных ---
 async def init_db():
     conn = await asyncpg.connect(DATABASE_URL)
     await conn.execute("""
@@ -141,7 +140,7 @@ async def handle_ai_query(message: types.Message):
         logging.error(f"Ошибка при запросе к Gemini: {e}")
         await message.answer("Извини, произошла ошибка при обращении к нейросети. Попробуй позже.")
 
-# --- Health check ---
+# --- Health check для хостинга ---
 async def handle_health_check(_):
     return web.Response(text="OK")
 
@@ -155,16 +154,17 @@ async def run_web_server():
     print(f"✅ Web server started on port {PORT}")
     await asyncio.Event().wait()
 
+# --- Запуск ---
 async def main():
     await init_db()
     asyncio.create_task(run_web_server())
-    print("🚀 Starting bot polling with Gemini...")
+    print("🚀 Starting bot polling...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except Exception as e:
-        print("FATAL ERROR:", file=sys.stderr)
+        print("FATAL ERROR in asyncio.run:", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
         sys.exit(1)
