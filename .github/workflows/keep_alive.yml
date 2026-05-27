@@ -1,0 +1,17 @@
+name: Keep Render Alive
+
+on:
+  schedule:
+    # Каждые 10 минут
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping the Render service
+        run: |
+          echo "Pinging Render service..."
+          curl -I -s -o /dev/null https://secretarybot-67ea.onrender.com/health
+          echo "Ping completed"
